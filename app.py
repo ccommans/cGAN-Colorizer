@@ -5,8 +5,12 @@ from torchvision import transforms
 from PIL import Image
 import numpy as np
 import cv2
+import os, requests
 
-# Import your model definition
+WEIGHT_URL = "https://github.com/ccommans/cGAN-Colorizer/releases/download/weights/G.pth"
+LOCAL_CHECKPOINT = "./G.pth"
+
+# Import model
 class UNetGenerator(nn.Module):
     def __init__(self, in_ch=2, out_ch=3, features=64):
         super().__init__()
@@ -68,9 +72,17 @@ class UNetGenerator(nn.Module):
         return self.final(d4)          # 128->256
 
 @st.cache_resource
+def download_weights(dest_path: str):
+    os.makedirs(os.path.dirname(dest_path) or ".", exist_ok=True)
+    r = requests.get(WEIGHT_URL, stream=True)
+    with open(dest_path, "wb") as f:
+        for chunk in r.iter_content(chunk_size=8192):
+            f.write(chunk)
+
+@st.cache_resource
 def load_model(checkpoint_path: str, device: torch.device):
     model = UNetGenerator(in_ch=2, out_ch=3).to(device)
-    model.load_state_dict(torch.load(checkpoint_path, weights_only=True, map_location=device))
+    model.load_state_dict(torch.load(checkpoint_path, map_location=device))
     model.eval()
     return model
 
@@ -100,21 +112,27 @@ def main():
     st.write("Upload a grayscale image, and see it colorized!")
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    checkpoint = "./G.pth"  # update if needed
-    model = load_model(checkpoint, device)
 
+    # If checkpoint is missing, grab it
+    if not os.path.isfile(LOCAL_CHECKPOINT):
+        download_weights(LOCAL_CHECKPOINT)
+
+    # Load once
+    model = load_model(LOCAL_CHECKPOINT, device)
+
+    # File uploader & inference
     uploaded_file = st.file_uploader("Choose a grayscale image", type=["jpg","jpeg","png","bmp"])
-    if uploaded_file is not None:
-        input_img = Image.open(uploaded_file)
-        st.image(input_img, caption="Input Grayscale", use_container_width=True)
+    if uploaded_file:
+        img = Image.open(uploaded_file)
+        st.image(img, caption="Input (Grayscale)", use_container_width=True)
 
-        inp, orig_size = preprocess_image(input_img, image_size=128)
+        inp, orig_sz = preprocess_image(img, image_size=128)
         inp = inp.to(device)
         with torch.no_grad():
-            output = model(inp)
-        result_img = postprocess_and_display(output, original_size=orig_size)
+            out = model(inp)
+        result = postprocess_and_display(out, original_size=orig_sz)
 
-        st.image(result_img, caption="Colorized Output", use_container_width=True)
+        st.image(result, caption="Colorized Output", use_container_width=True)
 
 if __name__ == "__main__":
     main()
